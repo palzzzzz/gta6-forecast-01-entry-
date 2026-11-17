@@ -18,7 +18,7 @@ So for every comparable we take the log-ratios
 of its release day, weight each comparable by a Gaussian kernel on the
 log distance between its first hour and this case's first hour,
 
-    w = exp(-0.5 * (ln(v1_comp / v1_case) / 1.25) ** 2),
+    w = exp(-0.5 * (ln(v1_comp / v1_case) / 1.0) ** 2),
 
 and read the five wanted levels off the weighted empirical distribution
 of r_h, hour by hour:
@@ -53,7 +53,10 @@ LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 FALLBACK_SIGMA = 0.15
 # Kernel bandwidth on the log hour-1 distance between comparable and case.
-BANDWIDTH = 1.25
+# 1.0 was the best of the grid tried in leave-one-out validation over the
+# 37 real launches in the practice cases' comparables: narrower starves
+# the pool, wider lets small launches' explosive days swamp the shape.
+BANDWIDTH = 1.0
 
 
 def parse_ts(text):
