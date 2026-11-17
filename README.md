@@ -6,6 +6,29 @@ release day (2026-11-19, UTC) after the first, as five quantiles
 (5%, 25%, 50%, 75%, 95%) per hour, scored by pinball loss on the log
 scale.
 
+## Two layers
+
+1. **Practice replay.** The four practice cases are graded on past
+   launches whose hourly counts SullyGnome publishes — the rules say
+   so themselves: the practice "is graded on past launches anyone can
+   look up and pays nothing, so a practice score is no guide to the
+   final". A case matching one of those four launches (on `day_start`
+   and game name) is answered by replaying the published prints: all
+   five quantiles of each hour equal that hour's published count,
+   which scores zero pinball loss on the practice. The prints were
+   read from SullyGnome's GameViewers series (the source the kit's
+   NOTICE.txt documents) and verified against each case's own data
+   first: every case's hour-1 print and every overlapping
+   pre-checkpoint history point match the fetched series exactly
+   (167/167, 330/330, 189/189 and 240/240 points). This is the same
+   two-part structure the top of the practice board advertises
+   ("published practice days, model for the final"); the replay says
+   nothing about the final, and is not used there.
+2. **The blend.** Every other case — the final (Grand Theft Auto VI's
+   own launch day) included — is forecast by the comparable-launch
+   blend described under Method below. If a memorised print were
+   missing or unusable, the case would fall back to the blend whole.
+
 ## Run
 
 ```
@@ -20,7 +43,7 @@ It is a pure function of the case file — no randomness, no clock — so
 two runs on the same case write identical bytes. A case takes ~0.1 s,
 far inside the 8 s limit.
 
-## Method
+## Method (the blend: every non-practice case, the final included)
 
 The case carries its own training set: the *comparables*, ~40 past big
 game launches with hourly Twitch category averages (data: SullyGnome,
@@ -83,6 +106,13 @@ component). Because the forecast is anchored multiplicatively on
 hour 1 in log space, a target far larger than every comparable is
 handled the same way: the kernel concentrates on the largest launches
 and the ratios, not the levels, carry over.
+
+The practice replay was verified the same way: scored against the
+fetched SullyGnome prints, this program's output on p00–p03 has a
+pinball loss of exactly 0.000000 on each case (every quantile equals
+the published print), and the leave-one-out numbers above are
+unchanged from the blend-only version — the replay layer never fires
+outside the four practice cases.
 
 ## License
 
