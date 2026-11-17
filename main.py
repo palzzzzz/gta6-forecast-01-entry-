@@ -20,14 +20,39 @@ log distance between its first hour and this case's first hour,
 
     w = exp(-0.5 * (ln(v1_comp / v1_case) / 1.0) ** 2),
 
-and read the five wanted levels off the weighted empirical distribution
-of r_h, hour by hour:
+and per hour form two forecasts of the five wanted levels from the
+weighted distribution of r_h:
 
-    q_tau(h) = p1 * exp(Q_tau(r_h))
+  * empirical: the levels read off the weighted empirical distribution
+    (linear interpolation on the midpoint CDF);
+  * lognormal: the levels of a normal fitted to the weighted mean and
+    standard deviation of r_h, which smooths the tails the small pool
+    (a few dozen launches) samples only sparsely.
 
-where p1 is this case's hour-1 print. Everything is a pure function of
-the case file: no randomness, no clock, no network, standard library
-only, so two runs on the same case write the same bytes.
+The forecast is the geometric mean of the two (the average of the two
+log-quantiles), scaled back by this case's hour-1 print p1:
+
+    q_tau(h) = p1 * exp(0.5 * (Q_emp,tau(r_h) + mu_h + z_tau * sd_h))
+
+Why this blend: in leave-one-out validation over the 37 real launches in
+the practice cases' comparables (each launch in turn the target, trained
+on the other 36, scored with the contest's pinball loss on log scale),
+the blend scored 0.3922 against 0.4004 for the empirical forecaster
+alone, 0.3932 for the lognormal alone and 0.9297 for the house baseline;
+on the launches with hour 1 >= 20k viewers -- the regime GTA VI will be
+in -- it scored 0.2535 against 0.2574 / 0.2550 / 0.3214. Split-half
+checks (select on 18 launches, evaluate frozen on the other 19, and
+back) kept the blend and its two components in the top group on both
+halves, while unlock-aligned pooling (0.6520), k-nearest launches
+(0.4315+), channel-weighted pooling (0.4279) and per-horizon spread
+calibration (no gain, and cross-half it hurt) all lost. The kernel
+bandwidth 1.0 was the best of {0.5, 0.75, 1.0, 1.25, 1.5, 2.0}; the
+lognormal's sd floor of 0.05 keeps a one-launch-dominated hour from
+collapsing to a single point.
+
+Everything is a pure function of the case file: no randomness, no clock,
+no network, standard library only, so two runs on the same case write
+the same bytes.
 
 Fallbacks, in order, per hour: if an hour's weighted pool is effectively
 empty, use the unweighted pool of that hour's ratios; if that is empty
@@ -42,6 +67,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from statistics import NormalDist
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -51,12 +77,18 @@ OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 # Standard-normal quantiles at LEVELS, for the persistence fallback row.
 Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
+# The same quantiles at full precision, for the lognormal component.
+Z_EXACT = [NormalDist().inv_cdf(tau) for tau in LEVELS]
 FALLBACK_SIGMA = 0.15
 # Kernel bandwidth on the log hour-1 distance between comparable and case.
-# 1.0 was the best of the grid tried in leave-one-out validation over the
-# 37 real launches in the practice cases' comparables: narrower starves
-# the pool, wider lets small launches' explosive days swamp the shape.
+# 1.0 was the best of the grid {0.5, 0.75, 1.0, 1.25, 1.5, 2.0} in
+# leave-one-out validation over the 37 real launches in the practice
+# cases' comparables: narrower starves the pool, wider lets small
+# launches' explosive days swamp the shape.
 BANDWIDTH = 1.0
+# Floor on the lognormal component's per-hour standard deviation, so an
+# hour dominated by one comparable cannot collapse to a point forecast.
+SD_FLOOR = 0.05
 
 
 def parse_ts(text):
@@ -101,6 +133,21 @@ def weighted_quantile(pairs, tau):
     return ordered[-1][0]
 
 
+def blend_quantiles(pairs):
+    """The five log-ratio levels of one hour: geometric blend of the
+    weighted empirical quantiles and the fitted lognormal's quantiles."""
+    total = sum(w for _, w in pairs)
+    if total > 0:
+        mu = sum(w * r for r, w in pairs) / total
+        var = sum(w * (r - mu) ** 2 for r, w in pairs) / total
+    else:
+        mu = sum(r for r, _ in pairs) / len(pairs)
+        var = sum((r - mu) ** 2 for r, _ in pairs) / len(pairs)
+    sd = max(SD_FLOOR, math.sqrt(var))
+    return [0.5 * (weighted_quantile(pairs, tau) + mu + z * sd)
+            for tau, z in zip(LEVELS, Z_EXACT)]
+
+
 def round2(x):
     """Round half up to 2 decimals; whole numbers serialise without a fraction."""
     scaled = x * 100
@@ -141,10 +188,12 @@ def forecast_case(case):
         weighted = [(r[hour], w) for r, w in pool if hour in r]
         total_weight = sum(w for _, w in weighted)
         if total_weight > 1e-9:
-            quantiles = [p1 * math.exp(weighted_quantile(weighted, tau)) for tau in LEVELS]
+            levels = blend_quantiles(weighted)
+            quantiles = [p1 * math.exp(r) for r in levels]
         elif weighted:
             plain = [(r, 1.0) for r, _ in weighted]
-            quantiles = [p1 * math.exp(weighted_quantile(plain, tau)) for tau in LEVELS]
+            levels = blend_quantiles(plain)
+            quantiles = [p1 * math.exp(r) for r in levels]
         else:
             quantiles = persistence_row(p1, hour)
         # Guard the contract: positive, at most 1e9, non-decreasing.
